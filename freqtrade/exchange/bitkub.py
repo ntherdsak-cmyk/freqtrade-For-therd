@@ -27,6 +27,7 @@ Configure in config.json:
 
 import hashlib
 import hmac
+import json
 import logging
 import time
 from datetime import datetime
@@ -136,12 +137,18 @@ class Bitkub(Exchange):
         self._last_markets_refresh: int = 0
         self._exchange_ws = None  # Not used for Bitkub
 
-        # Initialize async loop
-        self.loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self.loop)
+        # Initialize async loop - check if one already exists
+        try:
+            self.loop = asyncio.get_event_loop()
+            if self.loop.is_closed():
+                self.loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(self.loop)
+        except RuntimeError:
+            self.loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self.loop)
 
-        # Build ft_has
-        self._ft_has = deep_merge_dicts(self._ft_has, deepcopy(self._ft_has_default))
+        # Build ft_has using parent class's _ft_has_default
+        self._ft_has = deep_merge_dicts(self._ft_has, deepcopy(Exchange._ft_has_default))
 
         # Load markets
         self._load_bitkub_markets()
@@ -264,7 +271,6 @@ class Bitkub(Exchange):
         # Add timestamp to payload
         payload["ts"] = timestamp
 
-        import json
         payload_str = json.dumps(payload, separators=(",", ":"))
         signature = self._generate_signature(timestamp, payload_str)
 
@@ -291,9 +297,9 @@ class Bitkub(Exchange):
                 error_code = data.get("error", 0)
                 error_msg = self._get_error_message(error_code)
 
-                if error_code == 3:  # Insufficient balance
+                if error_code == 18:  # Insufficient balance
                     raise InsufficientFundsError(f"Insufficient funds: {error_msg}")
-                elif error_code in [1, 2]:  # Invalid JSON, missing field
+                elif error_code in [1, 2, 10, 11, 12, 13, 14, 22]:  # Invalid request errors
                     raise InvalidOrderException(f"Invalid order: {error_msg}")
                 else:
                     raise ExchangeError(f"Bitkub API error {error_code}: {error_msg}")
@@ -586,9 +592,24 @@ class Bitkub(Exchange):
             else:
                 endpoint = "/api/v3/market/place-ask"
 
+            # Bitkub order amount conventions:
+            # - For limit orders: amt = amount in base currency (e.g., BTC)
+            # - For market buy orders: amt = amount in quote currency (e.g., THB)
+            # - For market sell orders: amt = amount in base currency (e.g., BTC)
+            if ordertype == "market":
+                if side == "buy":
+                    # Market buy: amount is in quote currency
+                    order_amt = amount * rate
+                else:
+                    # Market sell: amount is in base currency
+                    order_amt = amount
+            else:
+                # Limit orders: amount is in base currency
+                order_amt = amount
+
             payload = {
                 "sym": symbol,
-                "amt": amount if ordertype == "market" else amount * rate,
+                "amt": order_amt,
                 "rat": rate if ordertype == "limit" else 0,
                 "typ": "limit" if ordertype == "limit" else "market",
             }
@@ -640,7 +661,7 @@ class Bitkub(Exchange):
         Args:
             order_id: Order ID to cancel
             pair: Trading pair
-            params: Additional parameters
+            params: Additional parameters (should include 'side' for proper cancellation)
 
         Returns:
             Cancelled order data
@@ -653,19 +674,25 @@ class Bitkub(Exchange):
             raise InvalidOrderException(f"Unknown symbol: {pair}")
 
         try:
-            # Determine side from order info if available
-            # Bitkub requires different endpoints for bid/ask cancellation
-            side = params.get("side", "sell") if params else "sell"
+            # Get side from params - if not provided, try to fetch order first
+            side = params.get("side") if params else None
+            if not side:
+                # Try to determine side from order
+                try:
+                    order = self.fetch_order(order_id, pair)
+                    side = order.get("side", "sell")
+                except Exception:
+                    # Default to sell if we can't determine
+                    side = "sell"
+                    logger.warning(
+                        f"Could not determine order side for {order_id}, defaulting to '{side}'"
+                    )
 
-            if side == "buy":
-                endpoint = "/api/v3/market/cancel-order"
-            else:
-                endpoint = "/api/v3/market/cancel-order"
-
+            endpoint = "/api/v3/market/cancel-order"
             payload = {
                 "sym": symbol,
                 "id": order_id,
-                "sd": "buy" if side == "buy" else "sell",
+                "sd": side,
             }
 
             response = self._make_private_request(endpoint, payload=payload)
