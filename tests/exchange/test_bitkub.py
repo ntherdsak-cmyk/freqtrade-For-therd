@@ -129,6 +129,37 @@ class TestBitkubMockCcxt:
         assert ticker["symbol"] == "BTC/THB"
         assert "timestamp" in ticker
 
+    def test_mock_ccxt_fetch_ohlcv(self):
+        """Test _BitkubMockCcxt fetch_ohlcv method."""
+        mock_client = MagicMock()
+        mock_client.fetch_symbols.return_value = {"result": []}
+        mock_client.fetch_trading_view_history.return_value = {
+            "t": [1700000000, 1700003600, 1700007200],
+            "o": [1450000, 1455000, 1452000],
+            "h": [1460000, 1458000, 1457000],
+            "l": [1445000, 1450000, 1448000],
+            "c": [1455000, 1452000, 1454000],
+            "v": [100.5, 150.2, 80.3],
+        }
+
+        mock_ccxt = _BitkubMockCcxt(mock_client)
+        ohlcv = mock_ccxt.fetch_ohlcv("BTC/THB", "1h")
+
+        assert len(ohlcv) == 3
+        assert ohlcv[0][0] == 1700000000 * 1000  # timestamp in ms
+        assert ohlcv[0][1] == 1450000  # open
+        assert ohlcv[0][2] == 1460000  # high
+        assert ohlcv[0][3] == 1445000  # low
+        assert ohlcv[0][4] == 1455000  # close
+        assert ohlcv[0][5] == 100.5  # volume
+
+    def test_mock_ccxt_fetch_ohlcv_empty(self):
+        """Test _BitkubMockCcxt fetch_ohlcv returns empty list when API unavailable."""
+        mock_ccxt = _BitkubMockCcxt()
+        ohlcv = mock_ccxt.fetch_ohlcv("BTC/THB", "1h")
+
+        assert ohlcv == []
+
     def test_mock_ccxt_fetch_tickers(self):
         """Test _BitkubMockCcxt fetch_tickers method."""
         mock_ccxt = _BitkubMockCcxt()

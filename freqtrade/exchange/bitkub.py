@@ -267,6 +267,78 @@ class _BitkubMockCcxt:
             self._load_markets()
         return self.markets
 
+    def fetch_ohlcv(
+        self,
+        symbol: str,
+        timeframe: str = "1h",
+        since: int | None = None,
+        limit: int | None = None,
+        params: dict | None = None,
+    ) -> list[list]:
+        """Fetch OHLCV data for a symbol.
+
+        Args:
+            symbol: Trading pair symbol.
+            timeframe: Timeframe string (e.g., "1h", "1d").
+            since: Timestamp in milliseconds for the start time.
+            limit: Maximum number of candles to return.
+            params: Additional parameters.
+
+        Returns:
+            List of OHLCV candles [[timestamp, open, high, low, close, volume], ...].
+        """
+        if self._client:
+            try:
+                base, quote = symbol.split("/")
+                bitkub_symbol = f"{quote}_{base}"
+
+                # Map timeframe to resolution (in seconds)
+                timeframe_map = {
+                    "1m": 60,
+                    "5m": 300,
+                    "15m": 900,
+                    "1h": 3600,
+                    "4h": 14400,
+                    "1d": 86400,
+                }
+                resolution = timeframe_map.get(timeframe, 3600)
+
+                # Calculate time range
+                now = int(datetime.now(UTC).timestamp())
+                if since:
+                    from_ts = since // 1000  # Convert from ms to seconds
+                else:
+                    # Default to last 24 hours
+                    from_ts = now - 86400
+
+                result = self._client.fetch_trading_view_history(
+                    sym=bitkub_symbol,
+                    resolution=resolution,
+                    from_ts=from_ts,
+                    to_ts=now,
+                )
+
+                if result and "c" in result:
+                    # Convert TradingView format to CCXT OHLCV format
+                    ohlcv = []
+                    for i in range(len(result.get("t", []))):
+                        ohlcv.append([
+                            result["t"][i] * 1000,  # timestamp in ms
+                            float(result.get("o", [0])[i] if i < len(result.get("o", [])) else 0),
+                            float(result.get("h", [0])[i] if i < len(result.get("h", [])) else 0),
+                            float(result.get("l", [0])[i] if i < len(result.get("l", [])) else 0),
+                            float(result.get("c", [0])[i] if i < len(result.get("c", [])) else 0),
+                            float(result.get("v", [0])[i] if i < len(result.get("v", [])) else 0),
+                        ])
+                    if limit:
+                        ohlcv = ohlcv[-limit:]
+                    return ohlcv
+            except Exception as e:
+                logger.warning(f"Failed to fetch OHLCV for {symbol}: {e}")
+
+        # Return empty list for dry-run when API is unavailable
+        return []
+
     def fetch_ticker(self, symbol: str, params: dict | None = None) -> dict[str, Any]:
         """Fetch ticker for a symbol.
 
