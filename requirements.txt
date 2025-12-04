@@ -27,6 +27,9 @@ joblib==1.5.2
 rich==14.2.0
 pyarrow==22.0.0; platform_machine != 'armv7l'
 
+# Bitkub exchange support (dry-run only)
+bitkub-python==0.2.0
+
 
 # Load ticker files 30% faster
 python-rapidjson==1.22
